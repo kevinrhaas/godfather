@@ -1,0 +1,13 @@
+{
+  "name": "the-corleone-pixel-saga",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A pixel-art arcade through the pivotal scenes of The Godfather (1972). Single self-contained HTML page, original chiptune, playable on mobile & desktop.",
+  "scripts": {
+    "start": "npx --yes serve -l 8080 .",
+    "test": "node test/smoke.mjs",
+    "shots": "node test/shots.mjs"
+  },
+  "keywords": ["game", "pixel-art", "godfather", "canvas", "chiptune"],
+  "license": "MIT"
+}

@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0d0b0a" />
+<title>THE CORLEONE — A Pixel Saga</title>
+<meta name="description" content="A pixel-art arcade through the pivotal scenes of The Godfather (1972). Six mini-games, original chiptune, playable on mobile & desktop." />
+<style>
+  :root{ --gold:#e3c567; --blood:#c8102e; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; padding:0; height:100%; background:#000; overflow:hidden;
+    font-family:"Courier New",monospace; color:#e8d9b0; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #wrap{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(circle at 50% 35%, #1a1410 0%, #000 90%); }
+  #game{ image-rendering:pixelated; image-rendering:crisp-edges;
+    background:#0d0b0a; box-shadow:0 0 60px rgba(0,0,0,.9), 0 0 0 2px #2a1f14, 0 0 0 6px #120d08;
+    touch-action:none; display:block; }
+  #hint{ position:fixed; left:0; right:0; bottom:6px; text-align:center; font-size:11px;
+    color:#7a6a4a; letter-spacing:1px; pointer-events:none; z-index:5; opacity:.0; transition:opacity .4s; }
+  #rotate{ position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    background:#0d0b0a; z-index:50; text-align:center; color:var(--gold); font-size:14px; letter-spacing:2px; padding:24px; }
+  #tapstart{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#000; z-index:40; cursor:pointer; }
+  #tapstart .inner{ text-align:center; }
+  #tapstart h1{ color:var(--gold); font-size:26px; letter-spacing:6px; margin:0 0 6px;
+    text-shadow:0 0 18px rgba(227,197,103,.4); }
+  #tapstart p{ color:#9a8a6a; letter-spacing:3px; font-size:12px; animation:blink 1.2s steps(2) infinite; }
+  @keyframes blink{ 50%{ opacity:.25; } }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="270" height="480"></canvas></div>
+<div id="hint">tap / arrow keys</div>
+<div id="rotate">please rotate to portrait<br>— the Don prefers it this way —</div>
+<div id="tapstart"><div class="inner">
+  <h1>THE&nbsp;CORLEONE</h1>
+  <p>▶ TAP TO BEGIN</p>
+</div></div>
+
+<script>
+"use strict";
+/* =========================================================================
+   THE CORLEONE — A Pixel Saga
+   A single-file pixel-art arcade through the pivotal scenes of
+   The Godfather (1972). All graphics procedural, all audio synthesized.
+   ========================================================================= */
+
+const W = 270, H = 480;                 // internal pixel resolution (portrait)
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+/* ---- responsive scaling: fit the bitmap into the viewport, integer-ish ---- */
+function resize(){
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const scale = Math.min(vw / W, vh / H);
+  canvas.style.width  = Math.floor(W * scale) + 'px';
+  canvas.style.height = Math.floor(H * scale) + 'px';
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', resize);
+resize();
+
+/* =========================== PALETTE ==================================== */
+const C = {
+  ink:'#0d0b0a', dark:'#1a1410', brown:'#3a2a1a', wood:'#5a3f28',
+  sepia:'#9a7b3a', gold:'#e3c567', goldDim:'#9a8338', cream:'#e8d9b0',
+  parch:'#d8c08a', shadow:'#120d08', skin:'#caa07a', skin2:'#a87a55',
+  blood:'#c8102e', blood2:'#8b0000', bright:'#ff3b3b', white:'#f4ecd8',
+  black:'#000000', grey:'#5a5048', green:'#3a5a2a', blue:'#2a3a5a',
+  orange:'#e08a1e', steel:'#9aa2a8',
+};
+
+/* =========================== INPUT ===================================== */
+const Input = {
+  px:0, py:0, down:false, justDown:false, justUp:false, moved:false,
+  keys:{}, keyJust:{},
+  _consume(){ this.justDown=false; this.justUp=false; this.keyJust={}; }
+};
+function toCanvas(clientX, clientY){
+  const r = canvas.getBoundingClientRect();
+  return { x:(clientX - r.left) / r.width * W, y:(clientY - r.top) / r.height * H };
+}
+function pDown(x,y){ const p=toCanvas(x,y); Input.px=p.x; Input.py=p.y; Input.down=true; Input.justDown=true; Input.moved=false; }
+function pMove(x,y){ const p=toCanvas(x,y); Input.px=p.x; Input.py=p.y; Input.moved=true; }
+function pUp(){ Input.down=false; Input.justUp=true; }
+
+canvas.addEventListener('pointerdown', e=>{ e.preventDefault(); pDown(e.clientX,e.clientY); ensureAudio(); }, {passive:false});
+canvas.addEventListener('pointermove', e=>{ e.preventDefault(); pMove(e.clientX,e.clientY); }, {passive:false});
+window.addEventListener('pointerup',   e=>{ pUp(); }, {passive:false});
+window.addEventListener('pointercancel', e=>{ pUp(); });
+
+window.addEventListener('keydown', e=>{
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(e.key)) e.preventDefault();
+  if(!Input.keys[e.key]) Input.keyJust[e.key]=true;
+  Input.keys[e.key]=true; ensureAudio();
+});
+window.addEventListener('keyup', e=>{ Input.keys[e.key]=false; });
+
+function keyJust(k){ return !!Input.keyJust[k]; }
+
+/* =========================== AUDIO (chiptune + SFX) ==================== */
+let AC=null, masterGain=null, musicOn=true, audioReady=false;
+function ensureAudio(){
+  if(AC) { if(AC.state==='suspended') AC.resume(); return; }
+  try{
+    AC = new (window.AudioContext||window.webkitAudioContext)();
+    masterGain = AC.createGain(); masterGain.gain.value = 0.5; masterGain.connect(AC.destination);
+    audioReady = true;
+    startMusic();
+  }catch(e){ audioReady=false; }
+}
+function tone(freq, t, dur, type, vol, glideTo){
+  if(!AC) return;
+  const o=AC.createOscillator(), g=AC.createGain();
+  o.type=type||'square'; o.frequency.setValueAtTime(freq, t);
+  if(glideTo) o.frequency.exponentialRampToValueAtTime(glideTo, t+dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol||0.2, t+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+dur+0.02);
+}
+function noise(t, dur, vol, filterFreq){
+  if(!AC) return;
+  const n = Math.floor(AC.sampleRate*dur);
+  const buf = AC.createBuffer(1,n,AC.sampleRate); const d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+  const src=AC.createBufferSource(); src.buffer=buf;
+  const f=AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value=filterFreq||1200;
+  const g=AC.createGain(); g.gain.value=vol||0.3;
+  src.connect(f); f.connect(g); g.connect(masterGain); src.start(t);
+}
+// SFX
+function sfx(name){
+  if(!AC) return; const t=AC.currentTime;
+  switch(name){
+    case 'blip':   tone(660,t,0.08,'square',0.18); break;
+    case 'select': tone(440,t,0.06,'square',0.2); tone(660,t+0.06,0.09,'square',0.2); break;
+    case 'coin':   tone(880,t,0.05,'square',0.18); tone(1320,t+0.05,0.12,'square',0.18); break;
+    case 'good':   tone(523,t,0.09,'triangle',0.22); tone(784,t+0.09,0.12,'triangle',0.22); break;
+    case 'bad':    tone(160,t,0.18,'sawtooth',0.22,90); break;
+    case 'shoot':  tone(220,t,0.04,'square',0.25,60); noise(t,0.18,0.4,2200); break;
+    case 'hit':    noise(t,0.12,0.4,900); tone(110,t,0.12,'sawtooth',0.2,55); break;
+    case 'scream': { for(let i=0;i<3;i++) tone(300+ i*40,t+i*0.02,0.5,'sawtooth',0.16,820); noise(t,0.5,0.25,1600);} break;
+    case 'step':   tone(120,t,0.04,'square',0.08); break;
+    case 'win':    [523,659,784,1046].forEach((f,i)=>tone(f,t+i*0.1,0.16,'triangle',0.22)); break;
+    case 'lose':   [392,330,262,196].forEach((f,i)=>tone(f,t+i*0.13,0.22,'sawtooth',0.2)); break;
+    case 'bell':   tone(784,t,0.5,'sine',0.18); tone(1175,t,0.6,'sine',0.10); break;
+    case 'splat':  noise(t,0.2,0.5,700); tone(90,t,0.18,'sawtooth',0.22,50); break;
+    case 'tick':   tone(1000,t,0.02,'square',0.12); break;
+  }
+}
+
+/* ---- The Corleone Waltz: an ORIGINAL 3/4 melody evoking the era ---- */
+const NOTE = {C3:130.81,D3:146.83,E3:164.81,F3:174.61,G3:196.0,A3:220.0,Bb3:233.08,B3:246.94,
+  C4:261.63,D4:293.66,Eb4:311.13,E4:329.63,F4:349.23,G4:392.0,Ab4:415.3,A4:440.0,Bb4:466.16,B4:493.88,
+  C5:523.25,D5:587.33,Eb5:622.25,E5:659.25,F5:698.46,G5:783.99,A5:880.0};
+// melancholic minor waltz (D minor-ish), original composition. [freq, beats]
+const MELODY = [
+  ['A4',1],['D5',2], ['F5',1],['E5',1],['D5',1], ['A4',1],['Bb4',2],
+  ['A4',1],['G4',1],['F4',1], ['E4',1],['F4',1],['G4',1], ['A4',3],
+  ['A4',1],['D5',2], ['F5',1],['E5',1],['D5',1], ['C5',1],['Bb4',2],
+  ['A4',1],['G4',1],['F4',1], ['E4',2],['G4',1], ['F4',3],
+  ['F4',1],['A4',2], ['D5',1],['C5',1],['Bb4',1], ['A4',1],['G4',2],
+  ['Bb4',1],['A4',1],['G4',1], ['F4',1],['E4',1],['D4',1], ['D4',3],
+];
+const BASS_ROOTS = ['D3','D3','A3','A3','Bb3','Bb3','F3','F3','G3','A3','D3','D3'];
+let musicTimer=null, mIndex=0, mTime=0, barCount=0;
+const BPM=132, BEAT=60/BPM;
+function startMusic(){
+  if(!AC || musicTimer) return;
+  mTime = AC.currentTime + 0.1; mIndex=0; barCount=0;
+  scheduleMusic();
+  musicTimer = setInterval(scheduleMusic, 120);
+}
+function scheduleMusic(){
+  if(!AC || !musicOn) return;
+  const ahead = AC.currentTime + 0.4;
+  while(mTime < ahead){
+    const [n,beats] = MELODY[mIndex % MELODY.length];
+    const dur = beats*BEAT;
+    // melody
+    tone(NOTE[n], mTime, dur*0.9, 'square', 0.12);
+    tone(NOTE[n]/2, mTime, dur*0.6, 'triangle', 0.05);
+    // waltz accompaniment: bass on 1, chord stabs on 2 & 3
+    const root = BASS_ROOTS[barCount % BASS_ROOTS.length];
+    tone(NOTE[root], mTime, BEAT*0.8, 'triangle', 0.12);
+    for(let b=1;b<beats;b++){
+      tone(NOTE[root]*1.5, mTime+b*BEAT, BEAT*0.4,'square',0.05);
+    }
+    mTime += dur; mIndex++; if(beats>=3 || (mIndex%3===0)) barCount++;
+  }
+}
+function toggleMusic(){ musicOn=!musicOn; if(masterGain) masterGain.gain.value = musicOn?0.5:0.5; }
+
+/* =========================== PIXEL DRAW HELPERS ======================== */
+function clear(col){ ctx.fillStyle=col||C.ink; ctx.fillRect(0,0,W,H); }
+function rect(x,y,w,h,col){ ctx.fillStyle=col; ctx.fillRect(x|0,y|0,w|0,h|0); }
+function px(x,y,col){ ctx.fillStyle=col; ctx.fillRect(x|0,y|0,1,1); }
+function circle(x,y,r,col){ ctx.fillStyle=col; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill(); }
+function line(x1,y1,x2,y2,col,w){ ctx.strokeStyle=col; ctx.lineWidth=w||1; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+
+// Sprite system: rows of chars -> color via map. '.' = transparent.
+function drawSprite(rows, map, x, y, s){
+  s = s||1;
+  for(let r=0;r<rows.length;r++){
+    const row=rows[r];
+    for(let c=0;c<row.length;c++){
+      const ch=row[c]; if(ch==='.'||ch===' ') continue;
+      const col=map[ch]; if(!col) continue;
+      ctx.fillStyle=col; ctx.fillRect((x+c*s)|0,(y+r*s)|0,s,s);
+    }
+  }
+}
+
+// Pixel text using a compact 3x5 font for crisp retro labels
+const FONT = {
+ 'A':['010','101','111','101','101'],'B':['110','101','110','101','110'],
+ 'C':['011','100','100','100','011'],'D':['110','101','101','101','110'],
+ 'E':['111','100','110','100','111'],'F':['111','100','110','100','100'],
+ 'G':['011','100','101','101','011'],'H':['101','101','111','101','101'],
+ 'I':['111','010','010','010','111'],'J':['001','001','001','101','010'],
+ 'K':['101','110','100','110','101'],'L':['100','100','100','100','111'],
+ 'M':['101','111','111','101','101'],'N':['101','111','111','111','101'],
+ 'O':['010','101','101','101','010'],'P':['110','101','110','100','100'],
+ 'Q':['010','101','101','110','011'],'R':['110','101','110','110','101'],
+ 'S':['011','100','010','001','110'],'T':['111','010','010','010','010'],
+ 'U':['101','101','101','101','111'],'V':['101','101','101','101','010'],
+ 'W':['101','101','111','111','101'],'X':['101','101','010','101','101'],
+ 'Y':['101','101','010','010','010'],'Z':['111','001','010','100','111'],
+ '0':['111','101','101','101','111'],'1':['010','110','010','010','111'],
+ '2':['110','001','010','100','111'],'3':['110','001','010','001','110'],
+ '4':['101','101','111','001','001'],'5':['111','100','110','001','110'],
+ '6':['011','100','110','101','010'],'7':['111','001','010','010','010'],
+ '8':['010','101','010','101','010'],'9':['010','101','011','001','110'],
+ '.':['000','000','000','000','010'],',':['000','000','000','010','100'],
+ '!':['010','010','010','000','010'],'?':['110','001','010','000','010'],
+ ':':['000','010','000','010','000'],"'":['010','010','000','000','000'],
+ '-':['000','000','111','000','000'],'/':['001','001','010','100','100'],
+ '+':['000','010','111','010','000'],'$':['011','110','010','011','110'],
+ '(':['001','010','010','010','001'],')':['100','010','010','010','100'],
+ ' ':['000','000','000','000','000'],'%':['101','001','010','100','101'],
+ '"':['101','101','000','000','000'],
+};
+function ptextWidth(str,s){ return str.length*(4*s); }
+function ptext(str, x, y, s, col){
+  s=s||1; str=(''+str).toUpperCase();
+  for(let i=0;i<str.length;i++){
+    const g=FONT[str[i]]||FONT[' '];
+    for(let r=0;r<5;r++) for(let c=0;c<3;c++){
+      if(g[r][c]==='1'){ ctx.fillStyle=col; ctx.fillRect(x+(i*4+c)*s, y+r*s, s, s); }
+    }
+  }
+}
+function ptextC(str, cx, y, s, col){ ptext(str, Math.round(cx - ptextWidth(str,s)/2), y, s, col); }
+
+// Larger fillText (used for big sepia titles), pixelated by canvas scaling
+function bigText(str, cx, y, size, col, align){
+  ctx.fillStyle=col; ctx.font='bold '+size+'px "Courier New",monospace';
+  ctx.textAlign=align||'center'; ctx.textBaseline='alphabetic';
+  ctx.fillText(str, cx, y); ctx.textAlign='left';
+}
+
+/* =========================== PARTICLES (blood etc) ===================== */
+let particles=[];
+function spawnBlood(x,y,amount,opts){
+  opts=opts||{};
+  const n=amount||12; const sp=opts.speed||1;
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, v=(0.5+Math.random()*2.2)*sp;
+    particles.push({ x, y, vx:Math.cos(a)*v, vy:Math.sin(a)*v - (opts.up?1.5:0),
+      g:opts.g!=null?opts.g:0.14, life:1, decay:0.012+Math.random()*0.02,
+      col: Math.random()<0.7?C.blood:C.blood2, size: 1+(Math.random()<0.3?1:0) });
+  }
+}
+function spawnParticles(x,y,n,cols,opts){
+  opts=opts||{};
+  for(let i=0;i<n;i++){
+    const a=(opts.dir!=null?opts.dir:Math.random()*Math.PI*2)+(Math.random()-0.5)*(opts.spread||6.28);
+    const v=(opts.speed||1.5)*(0.4+Math.random());
+    particles.push({ x,y, vx:Math.cos(a)*v, vy:Math.sin(a)*v, g:opts.g!=null?opts.g:0.05,
+      life:1, decay:0.02+Math.random()*0.03, col:cols[(Math.random()*cols.length)|0], size:opts.size||1 });
+  }
+}
+function updateParticles(){
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.x+=p.vx; p.y+=p.vy; p.vy+=p.g; p.life-=p.decay;
+    if(p.life<=0){ particles.splice(i,1); continue; }
+  }
+}
+function drawParticles(){
+  for(const p of particles){ ctx.globalAlpha=Math.max(0,Math.min(1,p.life)); rect(p.x,p.y,p.size,p.size,p.col); }
+  ctx.globalAlpha=1;
+}
+// permanent splatters drawn to a layer
+let splats=[];
+function addSplat(x,y,r,col){ splats.push({x,y,r,col}); if(splats.length>240) splats.shift(); }
+function drawSplats(){ for(const s of splats){ rect(s.x-s.r, s.y, s.r*2, 1, s.col); rect(s.x, s.y-s.r, 1, s.r*2, s.col); circle(s.x,s.y,s.r*0.6,s.col); } }
+
+/* =========================== SCENE FRAMEWORK =========================== */
+let scene=null, sceneT=0;
+function setScene(s){
+  particles=[]; splats=[]; sceneT=0;
+  scene=s; if(s.enter) s.enter();
+}
+let shakeT=0, shakeAmt=0;
+function shake(amt,t){ shakeAmt=amt; shakeT=t; }
+let flash=null;
+function doFlash(col,t){ flash={col,t,max:t}; }
+
+/* =========================== PROGRESS / SAVE =========================== */
+const GAMES = [
+  { id:'wedding',    name:'THE WEDDING',     sub:"DO ME THIS FAVOR" },
+  { id:'horse',      name:'THE OFFER',       sub:"HE CAN'T REFUSE" },
+  { id:'restaurant', name:'THE RESTAURANT',  sub:'SOLLOZZO & McCLUSKEY' },
+  { id:'oranges',    name:'THE ORANGES',     sub:'AN ATTEMPT ON THE DON' },
+  { id:'tollbooth',  name:'THE CAUSEWAY',    sub:'SANTINO' },
+  { id:'baptism',    name:'THE BAPTISM',     sub:'ALL FAMILY BUSINESS' },
+];
+let save = { best:{}, done:{}, respect:0 };
+try{ const s=JSON.parse(localStorage.getItem('corleone_save')); if(s) save=Object.assign(save,s); }catch(e){}
+function persist(){ try{ localStorage.setItem('corleone_save', JSON.stringify(save)); }catch(e){} }
+function recordResult(id, score, won){
+  if(won) save.done[id]=true;
+  if(!save.best[id] || score>save.best[id]) save.best[id]=score;
+  save.respect = Object.values(save.best).reduce((a,b)=>a+b,0);
+  persist();
+}
+function allDone(){ return GAMES.every(g=>save.done[g.id]); }
+
+/* =========================== MAIN LOOP ================================= */
+let last=0, glitchInit=true;
+function frame(ts){
+  const dt = Math.min(40, ts-last)/16.67; last=ts;
+  sceneT += dt;
+  if(scene && scene.update) scene.update(dt);
+
+  // camera shake
+  ctx.save();
+  if(shakeT>0){ shakeT-=dt; const a=shakeAmt*(shakeT>0?1:0); ctx.translate((Math.random()-0.5)*a,(Math.random()-0.5)*a); }
+  if(scene && scene.draw) scene.draw();
+  ctx.restore();
+
+  // flash overlay
+  if(flash){ flash.t-=dt; ctx.globalAlpha=Math.max(0,flash.t/flash.max)*0.8; clear(flash.col); ctx.globalAlpha=1; if(flash.t<=0) flash=null; }
+
+  Input._consume();
+  requestAnimationFrame(frame);
+}
+
+/* ====================================================================== */
+/* ============================  SCENES  ================================ */
+/* ====================================================================== */
+
+/* ---- shared UI bits ---- */
+function vignette(){
+  const g=ctx.createRadialGradient(W/2,H/2,H*0.25, W/2,H/2,H*0.62);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(0,0,0,0.55)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+}
+function scanlines(){
+  ctx.globalAlpha=0.06; ctx.fillStyle='#000';
+  for(let y=0;y<H;y+=2) ctx.fillRect(0,y,W,1);
+  ctx.globalAlpha=1;
+}
+function topBar(title){
+  rect(0,0,W,16,C.shadow); ptext(title,6,5,2,C.gold);
+  // back button
+  rect(W-30,2,28,12,C.brown); ptext('< X',W-27,5,2,C.cream);
+}
+function backHit(){ return Input.justDown && Input.px>W-32 && Input.py<16; }
+
+// Simple button
+function button(label, x, y, w, h, hot){
+  rect(x-1,y-1,w+2,h+2,C.shadow);
+  rect(x,y,w,h, hot?C.gold:C.brown);
+  rect(x,y,w,2, hot?C.cream:C.wood);
+  ptextC(label, x+w/2, y+h/2-2, 2, hot?C.ink:C.cream);
+  return Input.justUp && Input.px>=x && Input.px<=x+w && Input.py>=y && Input.py<=y+h;
+}
+function pressed(x,y,w,h){ return Input.justDown && Input.px>=x && Input.px<=x+w && Input.py>=y && Input.py<=y+h; }
+
+/* ====================== SPRITES ======================= */
+const SPR = {
+  don:{ rows:[
+    '..ssss..','.swwwws.','sw0ww0ws','swwwwwws','sw.ww.ws','swwmmwws','.swwwws.','..wbbw..',
+    '.bbbbbb.','bGGGGGGb','bGfWWfGb','GGGfWfGG','GGGGGGGG','bGG..GGb'],
+    map:{s:C.brown,w:C.skin,'0':C.black,m:C.blood2,b:C.shadow,G:'#1c1c1c',f:C.white} },
+  guy:{ rows:[
+    '.kkkk.','kwwwwk','w0ww0w','wwwwww','wwbbww','.wwww.','GGGGGG','GGGGGG','GbWbWG','GG..GG'],
+    map:{k:C.brown,w:C.skin,'0':C.black,b:C.blood2,G:'#26262a',W:C.white} },
+  mike:{ rows:[
+    '.kkkk.','kwwwwk','w0ww0w','wwwwww','ww__ww','.wwww.','GGGGGG','GGNNGG','GNWWNG','GG..GG'],
+    map:{k:'#1a1a1a',w:C.skin,'0':C.black,'_':C.skin2,G:'#1f2433',N:'#34405a',W:C.cream} },
+  guard:{ rows:[
+    '.bbbb.','bwwwwb','w0ww0w','wwwwww','.wwww.','BBBBBB','BByyBB','BBBBBB','BB..BB'],
+    map:{b:'#222',w:C.skin,'0':C.black,B:C.blue,y:C.gold} },
+  horse:{ rows:[
+    '..nnnn....','.nnnnnn...','nnwwnnnn..','nnwwnnnnn.','.nnnnnnnn.','..nnnnnn..','...mmmm...','..mmmmmm..','...mmmm...'],
+    map:{n:'#3a2c20',w:C.white,m:C.blood2} },
+  orange:{ rows:['.ooo.','ogggo','ooooo','ooooo','.ooo.'], map:{o:C.orange,g:C.green} },
+  envelope:{ rows:['EEEEEE','EwwwwE','EwGGwE','EwwwwE','EEEEEE'], map:{E:C.cream,w:C.parch,G:C.goldDim} },
+  gun:{ rows:['..GGGGG','GGGGGGw','GG.....','GG.....','wG.....'], map:{G:'#2a2a2a',w:C.steel} },
+  bottle:{ rows:['.gg.','.gg.','gGGg','gGGg','gGGg'], map:{g:C.green,G:'#2a4a1a'} },
+};
+
+/* ====================================================================== */
+/* BOOT / INTRO                                                            */
+/* ====================================================================== */
+const introScene = {
+  t:0,
+  enter(){ this.t=0; },
+  update(dt){ this.t+=dt; if(Input.justDown || keyJust(' ') || keyJust('Enter')){ sfx('select'); setScene(hubScene); } },
+  draw(){
+    clear(C.ink);
+    // sepia spotlight
+    const cx=W/2, cy=140;
+    const g=ctx.createRadialGradient(cx,cy,4,cx,cy,120); g.addColorStop(0,'#241a10'); g.addColorStop(1,C.ink);
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // puppet strings motif
+    ctx.globalAlpha=0.5; for(let i=0;i<5;i++){ line(40+i*48, 0, 60+i*40, 120, C.brown,1);} ctx.globalAlpha=1;
+    // title
+    bigText('THE', W/2, 90, 22, C.goldDim);
+    bigText('CORLEONE', W/2, 124, 30, C.gold);
+    ptextC('A PIXEL SAGA', W/2, 138, 2, C.sepia);
+    // hand sprite (the don)
+    drawSprite(SPR.don.rows, SPR.don.map, W/2-32, 170, 8);
+    ptextC('"I BELIEVE IN AMERICA."', W/2, 300, 1, C.cream);
+    ptextC('— AMERIGO BONASERA', W/2, 314, 1, C.sepia);
+
+    if(Math.floor(this.t/30)%2===0) ptextC('PRESS START', W/2, 360, 2, C.cream);
+    ptextC('AN ORIGINAL PIXEL TRIBUTE TO THE 1972 FILM', W/2, 430, 1, C.brown);
+    ptextC('NOT AFFILIATED WITH PARAMOUNT PICTURES', W/2, 444, 1, C.brown);
+    vignette(); scanlines();
+  }
+};
+
+/* ====================================================================== */
+/* HUB — level select                                                     */
+/* ====================================================================== */
+const hubScene = {
+  sel:0, scroll:0,
+  enter(){ },
+  update(dt){
+    // keyboard nav
+    if(keyJust('ArrowDown')){ this.sel=(this.sel+1)%GAMES.length; sfx('blip'); }
+    if(keyJust('ArrowUp')){ this.sel=(this.sel-1+GAMES.length)%GAMES.length; sfx('blip'); }
+    if(keyJust('Enter')||keyJust(' ')){ launchGame(GAMES[this.sel].id); }
+  },
+  draw(){
+    clear(C.ink);
+    // header
+    rect(0,0,W,40,C.shadow);
+    bigText('THE CORLEONE', W/2, 22, 18, C.gold);
+    ptextC('CHOOSE YOUR BUSINESS', W/2, 30, 1, C.sepia);
+
+    // respect meter
+    ptext('RESPECT', 6, 46, 1, C.sepia);
+    rect(6,54,120,6,C.brown); const rp=Math.min(120, save.respect/40);
+    rect(6,54,rp,6,C.gold); ptext(''+save.respect, 132, 46, 1, C.gold);
+
+    // music toggle
+    rect(W-36,46,30,12,C.brown); ptext(musicOn?'MUS:ON':'MUS:OF', W-34,49,1,C.cream);
+    if(Input.justUp && Input.px>W-38 && Input.px<W-4 && Input.py>46 && Input.py<58){ toggleMusic(); sfx('blip'); }
+
+    // game cards
+    const cardH=58, x0=8, y0=66, w=W-16;
+    for(let i=0;i<GAMES.length;i++){
+      const g=GAMES[i]; const y=y0+i*(cardH+4);
+      const hot = (this.sel===i);
+      const done = save.done[g.id];
+      rect(x0-1,y-1,w+2,cardH+2,C.shadow);
+      rect(x0,y,w,cardH, hot? '#2a2014' : C.dark);
+      rect(x0,y,4,cardH, done?C.blood:C.goldDim);
+      // index roman-ish
+      ptext(['I','II','III','IV','V','VI'][i], x0+8, y+8, 2, hot?C.gold:C.sepia);
+      ptext(g.name, x0+8, y+24, 2, hot?C.cream:C.parch);
+      ptext(g.sub, x0+8, y+38, 1, C.sepia);
+      // mini icon
+      drawGameIcon(g.id, x0+w-40, y+8, hot);
+      // best score / status
+      if(done) ptext('DONE', x0+w-40, y+44, 1, C.blood);
+      if(save.best[g.id]!=null) ptext('BEST '+save.best[g.id], x0+8, y+48, 1, C.goldDim);
+
+      if(Input.justDown && Input.py>=y && Input.py<=y+cardH){ this.sel=i; }
+      if(Input.justUp && Input.px>=x0 && Input.px<=x0+w && Input.py>=y && Input.py<=y+cardH && !Input.moved){
+        launchGame(g.id);
+      }
+    }
+
+    // finale unlock
+    const fy=y0+GAMES.length*(cardH+4)+2;
+    if(allDone()){
+      const hot=true;
+      rect(x0-1,fy-1,w+2,22,C.shadow); rect(x0,fy,w,20, Math.floor(sceneT/20)%2?C.blood:C.blood2);
+      ptextC('★ DON CORLEONE — VIEW ENDING ★', W/2, fy+6, 2, C.cream);
+      if(Input.justUp && Input.py>=fy && Input.py<=fy+20){ setScene(endingScene); }
+    } else {
+      ptextC('COMPLETE ALL SIX TO BECOME THE DON', W/2, fy+6, 1, C.brown);
+    }
+    vignette(); scanlines();
+  }
+};
+function drawGameIcon(id,x,y,hot){
+  switch(id){
+    case 'wedding': drawSprite(SPR.envelope.rows,SPR.envelope.map,x+4,y,4); break;
+    case 'horse': drawSprite(SPR.horse.rows,SPR.horse.map,x-6,y,2.6); break;
+    case 'restaurant': drawSprite(SPR.gun.rows,SPR.gun.map,x,y+4,3.4); break;
+    case 'oranges': drawSprite(SPR.orange.rows,SPR.orange.map,x+4,y+2,4); break;
+    case 'tollbooth': rect(x+2,y+2,18,16,C.steel); rect(x+9,y+2,4,16,C.brown); break;
+    case 'baptism': rect(x+8,y,4,18,C.gold); rect(x+4,y+5,12,4,C.gold); break;
+  }
+}
+
+/* ====================================================================== */
+/* Story card before each game                                            */
+/* ====================================================================== */
+function storyCard(title, lines, quote, onStart){
+  return {
+    t:0, enter(){ this.t=0; }, update(dt){ this.t+=dt;
+      if((Input.justDown && this.t>10) || keyJust(' ') || keyJust('Enter')){ sfx('select'); onStart(); } },
+    draw(){
+      clear(C.ink);
+      rect(0,40,W,4,C.blood2);
+      ptextC(title, W/2, 60, 3, C.gold);
+      let y=110; ctx.textAlign='left';
+      for(const ln of lines){ ptextC(ln, W/2, y, 1, C.cream); y+=14; }
+      // quote box
+      rect(20,y+14,W-40,46,C.shadow); rect(20,y+14,W-40,2,C.blood);
+      const qlines=wrapText(quote, 28);
+      let qy=y+24; for(const q of qlines){ ptextC(q, W/2, qy, 1, C.parch); qy+=11; }
+      if(Math.floor(this.t/26)%2===0) ptextC('TAP TO PLAY', W/2, H-60, 2, C.gold);
+      vignette(); scanlines();
+    }
+  };
+}
+function wrapText(str, max){
+  const words=str.split(' '); const lines=[]; let cur='';
+  for(const w of words){ if((cur+' '+w).trim().length>max){ lines.push(cur.trim()); cur=w; } else cur+=' '+w; }
+  if(cur.trim()) lines.push(cur.trim()); return lines;
+}
+
+/* ====================================================================== */
+/* Result card after each game                                            */
+/* ====================================================================== */
+function resultCard(won, score, msgWin, msgLose, gameId){
+  recordResult(gameId, score, won);
+  sfx(won?'win':'lose');
+  return {
+    t:0, enter(){ this.t=0; }, update(dt){ this.t+=dt; },
+    draw(){
+      clear(C.ink);
+      ptextC(won?'BUSINESS CONCLUDED':'IT WENT BAD', W/2, 70, 3, won?C.gold:C.blood);
+      drawSprite(SPR.don.rows, SPR.don.map, W/2-40, 110, 5);
+      ptextC((won?msgWin:msgLose), W/2, 240, 1, C.cream);
+      ptextC('RESPECT EARNED', W/2, 280, 1, C.sepia);
+      ptextC('+'+score, W/2, 296, 3, C.gold);
+      if(save.best[gameId]===score && won) ptextC('NEW BEST', W/2, 320, 2, C.blood);
+
+      if(button('RETRY', 30, 380, 90, 30, hover(30,380,90,30))) launchGame(gameId);
+      if(button('FAMILY', W-120, 380, 90, 30, hover(W-120,380,90,30))){ sfx('select'); setScene(hubScene); }
+      if(keyJust('Enter')){ setScene(hubScene); }
+      vignette(); scanlines();
+    }
+  };
+}
+function hover(x,y,w,h){ return Input.px>=x&&Input.px<=x+w&&Input.py>=y&&Input.py<=y+h; }
+
+/* ====================================================================== */
+/* GAME LAUNCHER                                                           */
+/* ====================================================================== */
+function launchGame(id){
+  sfx('select');
+  switch(id){
+    case 'wedding': setScene(storyCard('THE WEDDING',
+      ['CONNIE CORLEONE IS WED.','NO SICILIAN REFUSES A','FAVOR ON THIS DAY.','','CATCH THE WEDDING CASH','IN THE BRIDE\'S SILK PURSE.'],
+      'Some day, and that day may never come, I will call upon you to do a service for me.',
+      ()=>setScene(WeddingGame())) ); break;
+    case 'horse': setScene(storyCard('THE OFFER',
+      ['JACK WOLTZ SAID NO TO','THE DON. SNEAK THROUGH','HIS ESTATE AND LEAVE','HIM... A MESSAGE.','','AVOID THE SPOTLIGHTS.'],
+      "I'm gonna make him an offer he can't refuse.",
+      ()=>setScene(HorseGame())) ); break;
+    case 'restaurant': setScene(storyCard('THE RESTAURANT',
+      ['SOLLOZZO AND THE CROOKED','CAPTAIN McCLUSKEY WAIT.','A GUN IS TAPED BEHIND','THE TOILET.','','RETRIEVE IT. THEN... DECIDE.'],
+      "It's not personal, Sonny. It's strictly business.",
+      ()=>setScene(RestaurantGame())) ); break;
+    case 'oranges': setScene(storyCard('THE ORANGES',
+      ['THE DON BUYS FRUIT ON','THE STREET. GUNMEN CLOSE','IN. WHERE ARE HIS SONS?','','DODGE THE BULLETS.','SURVIVE THE AMBUSH.'],
+      'Where the hell is Sonny? ... Papa!',
+      ()=>setScene(OrangesGame())) ); break;
+    case 'tollbooth': setScene(storyCard('THE CAUSEWAY',
+      ['SONNY RACES TO PUNISH','CARLO. A TOLL BOOTH','WAITS ON THE CAUSEWAY.','','IT IS A TRAP.','DODGE AS LONG AS YOU CAN.'],
+      'You touch my sister again, I\'ll kill ya.',
+      ()=>setScene(TollGame())) ); break;
+    case 'baptism': setScene(storyCard('THE BAPTISM',
+      ['MICHAEL STANDS GODFATHER','AT THE FONT. ACROSS THE','CITY, HIS MEN SETTLE','ALL FAMILY BUSINESS.','','STRIKE EACH HEAD ON CUE.'],
+      'Do you renounce Satan? — I do renounce him.',
+      ()=>setScene(BaptismGame())) ); break;
+  }
+}
+
+/* ====================================================================== */
+/* GAME 1: THE WEDDING — catch the cash                                    */
+/* ====================================================================== */
+function WeddingGame(){
+  let purseX=W/2, items=[], spawnT=0, score=0, missed=0, timeLeft=45*60, combo=0, maxCombo=0;
+  let done=false;
+  const PW=46, PY=H-44;
+  return {
+    enter(){},
+    update(dt){
+      if(done) return;
+      timeLeft-=dt; if(timeLeft<=0){ finish(); return; }
+      // move purse
+      if(Input.down) purseX += (Input.px-purseX)*0.4;
+      if(Input.keys['ArrowLeft']) purseX-=5*dt;
+      if(Input.keys['ArrowRight']) purseX+=5*dt;
+      purseX=Math.max(PW/2, Math.min(W-PW/2, purseX));
+      // spawn
+      spawnT-=dt;
+      if(spawnT<=0){ spawnT=22+Math.random()*16 - Math.min(14, (45*60-timeLeft)/120);
+        const bad=Math.random()<0.16;
+        items.push({ x:20+Math.random()*(W-40), y:46, vy:1.3+Math.random()*1.4+ (45*60-timeLeft)/2400,
+          type: bad?'bottle':(Math.random()<0.12?'gold':'cash'), r:8 });
+      }
+      for(let i=items.length-1;i>=0;i--){
+        const it=items[i]; it.y+=it.vy*dt;
+        // catch
+        if(it.y>PY-6 && it.y<PY+10 && Math.abs(it.x-purseX)<PW/2+4){
+          if(it.type==='bottle'){ sfx('bad'); combo=0; missed++; shake(4,8); spawnParticles(it.x,it.y,8,[C.green],{speed:2}); }
+          else { const val=it.type==='gold'?5:1; score+=val*(1+Math.floor(combo/5)); combo++; maxCombo=Math.max(maxCombo,combo);
+            sfx(it.type==='gold'?'coin':'good'); spawnParticles(it.x,it.y,6,[C.gold,C.cream],{speed:1.5,g:0.1});
+            for(let k=0;k<combo&&k<3;k++); }
+          items.splice(i,1); continue;
+        }
+        if(it.y>H+10){ if(it.type!=='bottle'){ missed++; combo=0; } items.splice(i,1); }
+      }
+      if(missed>=8){ finish(); }
+      updateParticles();
+    },
+    draw(){
+      // warm wedding garden
+      clear('#2a1f12');
+      rect(0,0,W,H*0.5,'#3a2c18');
+      // string lights
+      for(let i=0;i<8;i++){ const lx=14+i*34, ly=30+Math.sin((sceneT+i*20)/30)*3; circle(lx,ly,2, i%2?C.gold:C.cream); line(0,24,W,24,C.brown,1); }
+      // guests silhouettes dancing
+      for(let i=0;i<6;i++){ const gx=20+i*42+Math.sin((sceneT+i*40)/40)*4; rect(gx,PY+20,8,16,'#1a130b'); }
+      // bride purse
+      rect(purseX-PW/2,PY,PW,18,'#d8c8e0'); rect(purseX-PW/2,PY,PW,3,C.cream);
+      rect(purseX-PW/2+6,PY-6,PW-12,8,'#b8a8c8'); ptextC('$',purseX,PY+5,2,C.goldDim);
+      // items
+      for(const it of items){
+        if(it.type==='bottle') drawSprite(SPR.bottle.rows,SPR.bottle.map,it.x-4,it.y-8,2);
+        else if(it.type==='gold'){ circle(it.x,it.y,6,C.gold); ptextC('$',it.x,it.y-3,1,C.brown); }
+        else drawSprite(SPR.envelope.rows,SPR.envelope.map,it.x-9,it.y-7,3);
+      }
+      drawParticles();
+      // HUD
+      topBar('THE WEDDING');
+      ptext('CASH '+score, 6, 20, 1, C.gold);
+      ptext('MISS '+missed+'/8', 90, 20, 1, missed>5?C.blood:C.sepia);
+      if(combo>2) ptextC('COMBO x'+combo, W/2, 30, 2, C.cream);
+      // timer bar
+      rect(W-70,20,64,5,C.brown); rect(W-70,20,64*Math.max(0,timeLeft/(45*60)),5,C.gold);
+      ptextC('DRAG THE PURSE — CATCH THE CASH, DODGE THE WINE', W/2, H-14, 1, C.brown);
+      vignette(); scanlines();
+      if(backHit()){ sfx('blip'); setScene(hubScene); }
+    }
+  };
+  function finish(){ done=true; const won=missed<8; setScene(resultCard(won, score,
+    'THE BRIDE\'S PURSE OVERFLOWS. THE FAMILY IS HONORED.',
+    'TOO MUCH SPILLED. A POOR SHOWING FOR THE DON.', 'wedding')); }
+}
+
+/* ====================================================================== */
+/* GAME 2: THE OFFER — stealth horse head                                  */
+/* ====================================================================== */
+function HorseGame(){
+  // grid stealth: move player up a mansion, avoid sweeping spotlights & guards
+  let px=W/2, py=H-40, caught=false, won=false, t=0, score=0;
+  const beds = {x:W/2, y:48};
+  // spotlights sweep horizontally at certain rows
+  const lights=[ {y:120,phase:0,sp:0.9,r:34}, {y:200,phase:2,sp:-1.1,r:30}, {y:300,phase:1,sp:1.3,r:28} ];
+  // patrolling guard
+  const guards=[ {x:40,y:160,dir:1,sp:1.0,range:[20,W-20]}, {x:W-40,y:250,dir:-1,sp:1.3,range:[20,W-20]} ];
+  let alarm=0, startY=py;
+  return {
+    enter(){},
+    update(dt){
+      if(caught||won) return;
+      t+=dt; score=Math.max(0, Math.floor((startY-py)/3));
+      // movement
+      let mx=0,my=0;
+      if(Input.down){ mx=(Input.px-px); my=(Input.py-py); const d=Math.hypot(mx,my)||1; mx/=d; my/=d; }
+      if(Input.keys['ArrowLeft'])mx=-1; if(Input.keys['ArrowRight'])mx=1;
+      if(Input.keys['ArrowUp'])my=-1; if(Input.keys['ArrowDown'])my=1;
+      const spd=2.2*dt; px+=mx*spd; py+=my*spd;
+      px=Math.max(10,Math.min(W-10,px)); py=Math.max(40,Math.min(H-30,py));
+      // lights
+      for(const l of lights){ l.lx = W/2 + Math.sin(t*0.02*l.sp + l.phase)*(W/2-30);
+        if(py>l.y-14 && py<l.y+14 && Math.abs(px-l.lx)<l.r){ alarm+=dt*3; } }
+      // guards
+      for(const g of guards){ g.x+=g.dir*g.sp*dt; if(g.x<g.range[0]||g.x>g.range[1]) g.dir*=-1;
+        if(Math.abs(px-g.x)<14 && Math.abs(py-g.y)<16){ alarm+=dt*4; } }
+      alarm=Math.max(0, alarm-dt*0.6);
+      if(alarm>40){ caught=true; sfx('lose'); shake(6,20); setTimeout(()=>{}, 0);
+        setScene(resultCard(false, score,'','THE GUARDS CAUGHT YOU IN THE LIGHT. WOLTZ SLEEPS SAFE — TONIGHT.','horse')); }
+      // reached bed
+      if(py<beds.y+10 && Math.abs(px-beds.x)<26){ won=true; sfx('scream'); shake(8,40); doFlash(C.blood,30);
+        spawnBlood(beds.x, beds.y+6, 50, {speed:2}); addSplat(beds.x,beds.y+8,16,C.blood2);
+        setTimeout(()=>setScene(resultCard(true, score+30,
+          'KHARTOUM\'S HEAD LIES IN HIS SHEETS. WOLTZ WILL CALL TOM HAGEN BY MORNING.',
+          '', 'horse')), 1400); }
+      updateParticles();
+    },
+    draw(){
+      clear('#0a0a12');
+      // mansion floor tiles
+      for(let y=40;y<H;y+=20) for(let x=0;x<W;x+=20){ if(((x/20+y/20)|0)%2) rect(x,y,20,20,'#11111a'); }
+      // bed (goal)
+      rect(beds.x-28,beds.y-8,56,30,'#2a2230'); rect(beds.x-28,beds.y-8,56,6,'#3a3040');
+      rect(beds.x-24,beds.y,48,18,won?C.blood2:'#d8d0c0');
+      if(won){ drawSprite(SPR.horse.rows,SPR.horse.map,beds.x-15,beds.y-2,3); }
+      else ptextC('WOLTZ BED', beds.x, beds.y+4, 1, C.brown);
+      drawSplats();
+      // spotlights
+      for(const l of lights){ const lx=l.lx!=null?l.lx:W/2;
+        ctx.globalAlpha=0.5; const g=ctx.createRadialGradient(lx,l.y,2,lx,l.y,l.r);
+        g.addColorStop(0,'rgba(240,230,180,0.7)'); g.addColorStop(1,'rgba(240,230,180,0)');
+        ctx.fillStyle=g; ctx.fillRect(lx-l.r,l.y-l.r,l.r*2,l.r*2); ctx.globalAlpha=1;
+        rect(lx-3,l.y-l.r-6,6,6,C.steel);
+      }
+      // guards
+      for(const g of guards){ drawSprite(SPR.guard.rows,SPR.guard.map,g.x-9,g.y-12,2);
+        // facing cone
+        ctx.globalAlpha=0.12; ctx.fillStyle=C.gold; ctx.fillRect(g.x-14,g.y-16,28,32); ctx.globalAlpha=1; }
+      // player (carrying head)
+      drawSprite(SPR.mike.rows, SPR.mike.map, px-6, py-10, 2);
+      circle(px+6,py-8,3,'#3a2c20'); // the burden
+      drawParticles();
+      // HUD
+      topBar('THE OFFER');
+      ptext('CLIMB '+score, 6, 20, 1, C.gold);
+      // alarm meter
+      ptext('ALARM', W-110, 20, 1, alarm>25?C.blood:C.sepia);
+      rect(W-72,20,64,5,C.brown); rect(W-72,20,64*Math.min(1,alarm/40),5, alarm>25?C.bright:C.blood);
+      ptextC('REACH THE BED — STAY OUT OF THE LIGHT', W/2, H-12, 1, C.brown);
+      vignette(); scanlines();
+      if(backHit()){ sfx('blip'); setScene(hubScene); }
+    }
+  };
+}
+
+/* ====================================================================== */
+/* GAME 3: THE RESTAURANT — retrieve gun, then the hit                     */
+/* ====================================================================== */
+function RestaurantGame(){
+  let phase='wait';   // wait -> bathroom -> return -> aim -> done
+  let t=0, tension=0, score=0;
+  // bathroom mini: tap moving target behind toilet
+  let barPos=0, barDir=1, barTargetA=40, barTargetB=58, taps=0;
+  // aim phase
+  let crossX=W/2, crossY=H/2, suspicion=0, shotsLeft=2, killed=0, talkTimer=0, lineIdx=0;
+  const lines=['SO... YOU WANT TALKS?','YOUR FATHER WILL LIVE.','WHAT GUARANTEE...','EASE YOUR MIND, MICHAEL.'];
+  const targets=[ {name:'SOLLOZZO',x:90,y:150,alive:true}, {name:'McCLUSKEY',x:185,y:170,alive:true} ];
+  let returned=false, msgT=0, endT=0;
+  return {
+    enter(){ phase='wait'; t=0; },
+    update(dt){
+      t+=dt;
+      if(phase==='wait'){
+        // The conversation builds; tap GO TO BATHROOM
+        if(t>30 && (Input.justUp)) { /* handled by button in draw */ }
+      } else if(phase==='bathroom'){
+        barPos+=barDir*3.2*dt; if(barPos>100||barPos<0) barDir*=-1; barPos=Math.max(0,Math.min(100,barPos));
+        if(Input.justDown){
+          if(barPos>=barTargetA && barPos<=barTargetB){ taps++; sfx('good'); spawnParticles(W/2,300,8,[C.gold],{speed:1.5});
+            barTargetA=20+Math.random()*50; barTargetB=barTargetA+14;
+            if(taps>=3){ phase='return'; msgT=0; sfx('coin'); } }
+          else { sfx('bad'); tension+=6; shake(3,6); }
+        }
+      } else if(phase==='return'){
+        msgT+=dt; if(msgT>90){ phase='aim'; talkTimer=0; }
+      } else if(phase==='aim'){
+        talkTimer+=dt;
+        // crosshair control
+        if(Input.down){ crossX=Input.px; crossY=Input.py; }
+        if(Input.keys['ArrowLeft'])crossX-=3*dt; if(Input.keys['ArrowRight'])crossX+=3*dt;
+        if(Input.keys['ArrowUp'])crossY-=3*dt; if(Input.keys['ArrowDown'])crossY+=3*dt;
+        crossX=Math.max(8,Math.min(W-8,crossX)); crossY=Math.max(60,Math.min(H-40,crossY));
+        // suspicion grows over time — must act before train-roar peak
+        suspicion+=dt*0.5;
+        // rotate dialogue
+        if(talkTimer>70){ talkTimer=0; lineIdx=(lineIdx+1)%lines.length; }
+        // fire
+        if(keyJust(' ') || (Input.justDown && Input.py>60)){
+          fire();
+        }
+        if(suspicion>100 && targets.some(t=>t.alive)){ // they drew first
+          phase='done'; endT=0; sfx('lose'); shake(6,16); doFlash(C.blood,20);
+          finish(false, 'THEY READ YOUR FACE. THE TABLE TURNED FIRST.'); }
+      } else if(phase==='done'){ endT+=dt; }
+      updateParticles();
+    },
+    draw(){
+      // restaurant interior — red checkered, warm
+      clear('#1a0e0a');
+      rect(0,40,W,H,'#2a1410');
+      // table
+      rect(40,120,W-80,90,'#3a1a14'); rect(40,120,W-80,6,'#5a2a1e');
+      // checkered tablecloth pattern
+      for(let y=126;y<206;y+=10) for(let x=44;x<W-44;x+=10){ if(((x/10+y/10)|0)%2) rect(x,y,10,10,'#7a1a14'); else rect(x,y,10,10,'#a83228'); }
+      // wine + plates
+      circle(80,150,5,'#7a1020'); circle(190,150,5,'#7a1020'); rect(110,150,40,18,'#d8c8a8');
+      // window with elevated train (the roar that covers the shots)
+      rect(20,52,W-40,24,'#0a0a14');
+      { const tx = (t*1.6) % (W+80) - 40;          // a train carriage rolling past
+        rect(tx,54,52,20,'#241820'); rect(tx,54,52,3,'#3a2a30');
+        for(let w=0;w<5;w++) rect(tx+4+w*10,58,6,8, (Math.floor(t/8)+w)%2 ? '#caa040':'#2a2018');
+        rect(tx-6,60,6,10,'#1a1218'); }
+      // flickering candle on the table
+      { const fl = 3 + Math.sin(t*0.6)*1 + (Math.random()<0.2?1:0);
+        ctx.globalAlpha=0.5; circle(150,150,fl*4,'#5a3a10'); ctx.globalAlpha=1;
+        rect(149,150,3,8,'#d8c8a8'); circle(150,150,fl,'#ffd060'); circle(150,149,fl*0.5,'#fff'); }
+      // the two men
+      for(const tg of targets){ if(tg.alive){ drawSprite(SPR.guy.rows,SPR.guy.map,tg.x-6,tg.y-30,2); ptextC(tg.name,tg.x,tg.y+4,1,C.sepia);}
+        else { addOnce(tg); ptextC(tg.name,tg.x,tg.y+4,1,C.blood2); } }
+      drawSplats();
+      // Michael (player) bottom
+      drawSprite(SPR.mike.rows,SPR.mike.map, W/2-6, H-58, 2);
+
+      drawParticles();
+      topBar('THE RESTAURANT');
+
+      if(phase==='wait'){
+        dialog('SOLLOZZO: I NEED A TRUCE WITH YOUR FAMILY...');
+        ptextC('THE GUN IS TAPED BEHIND THE TOILET.', W/2, 250, 1, C.parch);
+        if(button('GO TO THE BATHROOM', 35, 300, W-70, 26, hover(35,300,W-70,26)) && t>20){ phase='bathroom'; sfx('select'); }
+      }
+      else if(phase==='bathroom'){
+        // overlay bathroom
+        ctx.fillStyle='rgba(8,8,12,0.92)'; ctx.fillRect(0,40,W,H-40);
+        ptextC('BEHIND THE TOILET...', W/2, 70, 2, C.cream);
+        rect(W/2-30,110,60,80,'#cfcfd6'); rect(W/2-24,118,48,30,'#b8b8c0'); // toilet tank
+        // hidden gun behind, reach timing bar
+        ptextC('STOP THE HAND ON THE GUN', W/2, 210, 1, C.sepia);
+        rect(35,240,W-70,16,C.brown);
+        rect(35+(W-70)*barTargetA/100,240,(W-70)*(barTargetB-barTargetA)/100,16,C.green);
+        rect(35+(W-70)*barPos/100-2,236,4,24,C.gold);
+        ptextC('TAPS '+taps+'/3', W/2, 270, 2, C.gold);
+        ptextC('TAP WHEN THE MARKER IS IN THE GREEN', W/2, H-30, 1, C.brown);
+      }
+      else if(phase==='return'){
+        ctx.fillStyle='rgba(8,8,12,'+Math.max(0,0.9-msgT/100)+')'; ctx.fillRect(0,40,W,H-40);
+        ptextC('THE GUN IS IN YOUR HAND.', W/2, H/2-10, 2, C.gold);
+        ptextC('SIT. BREATHE. WAIT FOR THE TRAIN.', W/2, H/2+10, 1, C.parch);
+      }
+      else if(phase==='aim'){
+        dialog(lines[lineIdx]);
+        // train roar suspicion meter
+        ptext('SUSPICION', 6, 22, 1, suspicion>70?C.blood:C.sepia);
+        rect(70,22,80,5,C.brown); rect(70,22,80*Math.min(1,suspicion/100),5, suspicion>70?C.bright:C.gold);
+        ptext('SHOTS '+shotsLeft, W-60,22,1,C.gold);
+        // crosshair
+        ctx.strokeStyle=C.bright; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.arc(crossX,crossY,8,0,7); ctx.stroke();
+        line(crossX-12,crossY,crossX-4,crossY,C.bright,1); line(crossX+4,crossY,crossX+12,crossY,C.bright,1);
+        line(crossX,crossY-12,crossX,crossY-4,C.bright,1); line(crossX,crossY+4,crossX,crossY+12,C.bright,1);
+        ptextC('AIM AT THE HEAD — TAP/ SPACE TO FIRE', W/2, H-12, 1, C.brown);
+      }
+      else if(phase==='done'){
+        ptextC(killed>=2?'...HE WALKS OUT. THE GUN DROPS.':'', W/2, H-30, 1, C.cream);
+      }
+      vignette(); scanlines();
+      if(backHit()){ sfx('blip'); setScene(hubScene); }
+    }
+  };
+  function addOnce(tg){ if(!tg.splatted){ tg.splatted=true; } drawSprite(SPR.guy.rows,{k:'#1a1a1a',w:C.blood2,'0':C.black,b:C.blood2,G:'#1a0a0a',W:C.blood}, tg.x-6, tg.y-30, 2); }
+  function fire(){
+    if(shotsLeft<=0) return;
+    let hit=null;
+    for(const tg of targets){ if(tg.alive && Math.abs(crossX-tg.x)<14 && Math.abs((crossY)-(tg.y-22))<16){ hit=tg; break; } }
+    sfx('shoot'); shake(5,8); doFlash('#fff',6); shotsLeft--;
+    if(hit){ hit.alive=false; killed++; sfx('hit'); spawnBlood(hit.x,hit.y-22,40,{speed:2}); addSplat(hit.x,hit.y-10,12,C.blood2);
+      suspicion=Math.max(0,suspicion-40);
+      if(killed>=2){ phase='done'; endT=0; setTimeout(()=>finish(true,'TWO SHOTS, TWO MEN. YOU DROP THE GUN AND WALK. LEAVE THE GUN. TAKE THE CANNOLI.'),900); }
+    } else { suspicion+=18; spawnParticles(crossX,crossY,6,[C.steel],{speed:2}); }
+    if(shotsLeft<=0 && killed<2){ setTimeout(()=>{ if(phase==='aim'){ phase='done'; finish(false,'A SHOT WENT WIDE. NO BULLETS LEFT. THEY WERE FASTER.'); } }, 700); }
+  }
+  function dialog(txt){ rect(8,H-92,W-16,40,'rgba(8,6,4,0.85)'); rect(8,H-92,W-16,2,C.blood);
+    const ls=wrapText(txt,38); let y=H-84; for(const l of ls){ ptext(l,14,y,1,C.cream); y+=11; } }
+  function finish(won,msg){ const sc=score + killed*15 + (won?20:0); recordedFinish=true;
+    setScene(resultCard(won, sc, msg, msg, 'restaurant')); }
+}
+let recordedFinish=false;
+
+/* ====================================================================== */
+/* GAME 4: THE ORANGES — dodge the ambush                                  */
+/* ====================================================================== */
+function OrangesGame(){
+  let donX=W/2, hp=5, t=0, score=0, bullets=[], gunmen=[], spawnT=0, done=false, survive=40*60;
+  let oranges=[]; // falling oranges as cover/score
+  // two gunmen at top
+  gunmen.push({x:70,y:70,t:0}); gunmen.push({x:W-70,y:70,t:30});
+  const DONY=H-70;
+  return {
+    enter(){},
+    update(dt){
+      if(done) return;
+      t+=dt; survive-=dt; if(survive<=0){ finish(true); return; }
+      score=Math.floor((40*60-survive)/20);
+      // move don
+      if(Input.down) donX += (Input.px-donX)*0.35;
+      if(Input.keys['ArrowLeft'])donX-=4*dt; if(Input.keys['ArrowRight'])donX+=4*dt;
+      donX=Math.max(16,Math.min(W-16,donX));
+      // gunmen fire
+      for(const g of gunmen){ g.t-=dt; g.x += Math.sin(t*0.02 + g.y)*0.6;
+        if(g.t<=0){ g.t=34 - Math.min(20,(40*60-survive)/120);
+          const ang=Math.atan2(DONY-g.y, donX-g.x) + (Math.random()-0.5)*0.5;
+          const sp=2.2; bullets.push({x:g.x,y:g.y,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp}); sfx('shoot'); }
+      }
+      // oranges fall
+      spawnT-=dt; if(spawnT<=0){ spawnT=40+Math.random()*40; oranges.push({x:20+Math.random()*(W-40),y:120,vy:1.5}); }
+      for(let i=oranges.length-1;i>=0;i--){ const o=oranges[i]; o.y+=o.vy*dt;
+        if(Math.abs(o.x-donX)<14 && Math.abs(o.y-DONY)<14){ score+=2; sfx('coin'); spawnParticles(o.x,o.y,6,[C.orange],{speed:1.5}); oranges.splice(i,1); continue; }
+        if(o.y>H){ oranges.splice(i,1); } }
+      // bullets
+      for(let i=bullets.length-1;i>=0;i--){ const b=bullets[i]; b.x+=b.vx*dt; b.y+=b.vy*dt;
+        if(b.x<-4||b.x>W+4||b.y>H+4){ bullets.splice(i,1); continue; }
+        if(Math.abs(b.x-donX)<9 && Math.abs(b.y-DONY)<14){ hp--; sfx('hit'); shake(5,8); doFlash(C.blood,8);
+          spawnBlood(donX,DONY-10,24,{speed:2}); addSplat(donX,DONY+4,8,C.blood2); bullets.splice(i,1);
+          if(hp<=0){ finish(false); return; } }
+      }
+      updateParticles();
+    },
+    draw(){
+      clear('#1a1612');
+      // street
+      rect(0,H-40,W,40,'#2a2420'); for(let x=0;x<W;x+=24) rect(x,H-22,14,3,C.gold);
+      // fruit stand
+      rect(donX-40,DONY-2,80,40,'#3a2a18'); // approximate stand behind
+      rect(40,100,W-80,26,'#4a3420'); ptextC('GENCO PURE OLIVE OIL', W/2, 108, 1, C.parch);
+      for(let i=0;i<14;i++){ circle(50+i*15, 130+ (i%2)*4, 4, C.orange); }
+      // gunmen
+      for(const g of gunmen){ drawSprite(SPR.guy.rows,{k:'#111',w:C.skin,'0':C.black,b:'#333',G:'#222',W:C.steel},g.x-6,g.y-14,2); }
+      // oranges falling
+      for(const o of oranges) drawSprite(SPR.orange.rows,SPR.orange.map,o.x-5,o.y-5,2);
+      // the don
+      drawSprite(SPR.don.rows, SPR.don.map, donX-16, DONY-24, 2);
+      drawSplats();
+      // bullets
+      for(const b of bullets){ rect(b.x-1,b.y-1,3,3,C.gold); rect(b.x-b.vx,b.y-b.vy,2,2,'#a88820'); }
+      drawParticles();
+      // HUD
+      topBar('THE ORANGES');
+      ptext('SCORE '+score, 6,20,1,C.gold);
+      for(let i=0;i<5;i++){ rect(W-70+i*13,18,10,8, i<hp?C.blood:C.brown); }
+      rect(W-90,28,84,4,C.brown); rect(W-90,28,84*Math.max(0,survive/(40*60)),4,C.gold);
+      ptextC('DRAG TO DODGE — CATCH ORANGES FOR LUCK', W/2, H-10, 1, C.brown);
+      vignette(); scanlines();
+      if(backHit()){ sfx('blip'); setScene(hubScene); }
+    }
+  };
+  function finish(won){ done=true; const sc=score+(won?25:0);
+    setScene(resultCard(won, sc,
+      'THE DON TAKES FIVE BULLETS AND LIVES. "JUST LIE THERE, POP." A HARD MAN TO KILL.',
+      'TOO MANY SHOTS FOUND THEIR MARK. THE STREET GOES QUIET.', 'oranges')); }
+}
+
+/* ====================================================================== */
+/* GAME 5: THE CAUSEWAY — toll booth bullet-hell survival                   */
+/* ====================================================================== */
+function TollGame(){
+  let carX=W/2, t=0, hp=3, bullets=[], shooters=[], done=false, survive=35*60, score=0, spawnT=0;
+  const CARY=H-70;
+  // four tommy guns appear from booths
+  return {
+    enter(){ shooters=[ {x:30,y:120}, {x:W-30,y:120}, {x:70,y:80}, {x:W-70,y:80} ].map((s,i)=>Object.assign(s,{t:i*12})); },
+    update(dt){
+      if(done) return;
+      t+=dt; survive-=dt; score=Math.floor((35*60-survive)/15);
+      if(survive<=0){ finish(true); return; }
+      if(Input.down) carX += (Input.px-carX)*0.4;
+      if(Input.keys['ArrowLeft'])carX-=5*dt; if(Input.keys['ArrowRight'])carX+=5*dt;
+      carX=Math.max(20,Math.min(W-20,carX));
+      const intensity=Math.min(1,(35*60-survive)/(28*60));
+      for(const s of shooters){ s.t-=dt; if(s.t<=0){ s.t=18-12*intensity;
+        const ang=Math.atan2(CARY-s.y, carX-s.x)+(Math.random()-0.5)*0.7; const sp=2.4+intensity*1.5;
+        bullets.push({x:s.x,y:s.y,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp}); if(Math.random()<0.3)sfx('shoot'); } }
+      for(let i=bullets.length-1;i>=0;i--){ const b=bullets[i]; b.x+=b.vx*dt; b.y+=b.vy*dt;
+        if(b.y>H+6||b.x<-6||b.x>W+6){ bullets.splice(i,1); continue; }
+        if(Math.abs(b.x-carX)<11 && Math.abs(b.y-CARY)<9){ hp--; sfx('hit'); shake(6,8); doFlash(C.blood,8);
+          spawnBlood(carX,CARY,30,{speed:2.4}); addSplat(carX,CARY+4,10,C.blood2); bullets.splice(i,1);
+          if(hp<=0){ finish(false); return; } } }
+      updateParticles();
+    },
+    draw(){
+      clear('#10141a');
+      // road
+      rect(W/2-40,40,80,H,'#1a1a20'); for(let y=(t*2)%40;y<H;y+=40) rect(W/2-3,y,6,18,C.gold);
+      // toll booths
+      for(let i=0;i<2;i++){ const bx=i?W-46:14; rect(bx,90,32,50,'#3a3a40'); rect(bx+4,96,24,18,'#0a0a10'); rect(bx,90,32,4,C.steel); }
+      rect(0,60,W,8,'#4a4a50'); ptextC('CAUSEWAY TOLL', W/2, 50, 1, C.sepia);
+      // shooters muzzle flashes
+      for(const s of shooters){ drawSprite(SPR.guy.rows,{k:'#111',w:C.skin,'0':C.black,b:'#222',G:'#1a1a22',W:C.steel},s.x-6,s.y-14,2);
+        if(s.t>16) circle(s.x,s.y,3,C.gold); }
+      // Sonny's car
+      rect(carX-16,CARY-10,32,22,'#1a1a1a'); rect(carX-16,CARY-10,32,6,'#2a2a2a');
+      rect(carX-12,CARY-6,24,8,'#3a4a6a'); circle(carX-10,CARY+12,4,'#0a0a0a'); circle(carX+10,CARY+12,4,'#0a0a0a');
+      drawSprite(SPR.guy.rows,{k:'#1a1a1a',w:C.skin,'0':C.black,b:'#5a1a1a',G:'#3a2a2a',W:C.cream},carX-6,CARY-22,1.6);
+      drawSplats();
+      for(const b of bullets){ rect(b.x-1,b.y-1,3,3,C.gold); }
+      drawParticles();
+      topBar('THE CAUSEWAY');
+      ptext('SCORE '+score,6,20,1,C.gold);
+      for(let i=0;i<3;i++){ rect(W-50+i*14,18,11,8, i<hp?C.blood:C.brown); }
+      rect(6,28,100,4,C.brown); rect(6,28,100*Math.max(0,survive/(35*60)),4,C.gold);
+      ptextC('DODGE THE GUNFIRE — HOW LONG CAN SANTINO LAST?', W/2, H-10, 1, C.brown);
+      vignette(); scanlines();
+      if(backHit()){ sfx('blip'); setScene(hubScene); }
+    }
+  };
+  function finish(won){ done=true; const sc=score+(won?20:0);
+    setScene(resultCard(won, sc,
+      'AGAINST ALL ODDS, SONNY GUNS IT THROUGH. THE FAMILY KEEPS ITS HOT-HEAD — THIS TIME.',
+      'SANTINO FALLS AT THE TOLL. SONNY CORLEONE IS GONE. THE WAR HAS A PRICE.', 'tollbooth')); }
+}
+
+/* ====================================================================== */
+/* GAME 6: THE BAPTISM — rhythm: settle all family business                 */
+/* ====================================================================== */
+function BaptismGame(){
+  // targets (the five family heads) appear on beat; tap them in time with the vows
+  let t=0, score=0, combo=0, maxCombo=0, hits=0, miss=0, done=false;
+  let beats=[], beatT=0, vowIdx=0, total=0, spawned=0;
+  const TARGETS=20;
+  const vows=['DO YOU RENOUNCE SATAN?','— I DO RENOUNCE HIM.','AND ALL HIS WORKS?','— I DO RENOUNCE THEM.','DO YOU BELIEVE IN GOD?','— I DO BELIEVE.'];
+  const names=['BARZINI','TATTAGLIA','CUNEO','STRACCI','MOE GREENE'];
+  return {
+    enter(){},
+    update(dt){
+      if(done) return;
+      t+=dt;
+      // spawn targets on a steady beat
+      beatT-=dt;
+      if(beatT<=0 && spawned<TARGETS){ beatT=46; spawned++;
+        const side=Math.random();
+        beats.push({ x:30+Math.random()*(W-60), y:90+Math.random()*(H-200), born:t, life:60,
+          name:names[(Math.random()*names.length)|0], hit:false, r:18 });
+        sfx('tick');
+        if(spawned%3===0){ vowIdx=(vowIdx+1)%vows.length; }
+      }
+      for(let i=beats.length-1;i>=0;i--){ const b=beats[i]; const age=t-b.born;
+        if(!b.hit && age>b.life){ miss++; combo=0; beats.splice(i,1); sfx('bad');
+          if(miss>=5){ finish(); return; } continue; }
+        if(b.hit && age>b.life){ beats.splice(i,1); }
+      }
+      // tap
+      if(Input.justDown){
+        let best=null,bd=1e9;
+        for(const b of beats){ if(b.hit)continue; const d=Math.hypot(Input.px-b.x,Input.py-b.y); if(d<b.r+6 && d<bd){bd=d;best=b;} }
+        if(best){ best.hit=true; hits++; const age=t-best.born;
+          // timing bonus: closer to the 'ring' fit = better
+          const acc=1-Math.min(1, Math.abs(age - best.life*0.6)/(best.life*0.6));
+          const pts=Math.round(5+acc*10); score+=pts*(1+Math.floor(combo/4)); combo++; maxCombo=Math.max(maxCombo,combo);
+          sfx('shoot'); if(combo%4===0)sfx('hit'); shake(3,5); doFlash('#fff',4);
+          spawnBlood(best.x,best.y,28,{speed:2}); addSplat(best.x,best.y+6,10,C.blood2);
+        } else { sfx('bad'); combo=0; }
+      }
+      if(spawned>=TARGETS && beats.length===0){ finish(); }
+      updateParticles();
+    },
+    draw(){
+      clear('#0a0810');
+      // cathedral: pillars + stained glass
+      for(let i=0;i<4;i++){ rect(20+i*70,40,16,H,'#161018'); }
+      // stained glass glow up top
+      for(let i=0;i<6;i++){ const gx=20+i*40; ctx.globalAlpha=0.4; rect(gx,44,30,40, [C.blood,C.blue,C.gold,C.green][i%4]); ctx.globalAlpha=1; }
+      // altar / font
+      rect(W/2-20,40,40,18,'#2a2030'); rect(W/2-6,40,12,18,C.gold);
+      drawSplats();
+      // targets (the heads)
+      for(const b of beats){ if(b.hit){ // executed
+          drawSprite(SPR.guy.rows,{k:'#111',w:C.blood2,'0':C.black,b:C.blood2,G:'#1a0a0a',W:C.blood},b.x-6,b.y-10,2);
+          continue; }
+        const age=t-b.born; const shrink=1-age/b.life;
+        // closing ring (tap when ring meets the body)
+        ctx.strokeStyle=C.gold; ctx.lineWidth=2; ctx.globalAlpha=0.8;
+        ctx.beginPath(); ctx.arc(b.x,b.y, b.r + shrink*22, 0,7); ctx.stroke(); ctx.globalAlpha=1;
+        drawSprite(SPR.guy.rows,SPR.guy.map,b.x-6,b.y-10,2);
+        ptextC(b.name,b.x,b.y+12,1,C.sepia);
+      }
+      drawParticles();
+      // baptism vow ticker
+      rect(0,H-58,W,30,'rgba(8,6,12,0.85)'); rect(0,H-58,W,2,C.gold);
+      ptextC(vows[vowIdx], W/2, H-48, 1, C.cream);
+      ptextC('PRIEST AT THE FONT — HIS MEN ACROSS THE CITY', W/2, H-36, 1, C.brown);
+      topBar('THE BAPTISM');
+      ptext('SCORE '+score,6,20,1,C.gold);
+      ptext('HITS '+hits+'/'+TARGETS,90,20,1,C.sepia);
+      if(combo>2) ptextC('x'+combo,W/2,30,2,C.cream);
+      for(let i=0;i<5;i++) rect(W-50+i*9,20,7,6, i<(5-miss)?C.blood:C.brown);
+      vignette(); scanlines();
+      if(backHit()){ sfx('blip'); setScene(hubScene); }
+    }
+  };
+  function finish(){ done=true; const won=miss<5; const sc=score+maxCombo*2;
+    setScene(resultCard(won, sc,
+      'AS THE WATER TOUCHES THE CHILD, THE FIVE FAMILIES FALL. MICHAEL IS THE DON.',
+      'THE HITS WERE MESSY. ENEMIES SURVIVED. THE THRONE IS NOT YET SECURE.', 'baptism')); }
+}
+
+/* ====================================================================== */
+/* ENDING                                                                  */
+/* ====================================================================== */
+const endingScene = {
+  t:0, enter(){ this.t=0; sfx('bell'); },
+  update(dt){ this.t+=dt; if(Input.justDown && this.t>30){ sfx('select'); setScene(hubScene); } },
+  draw(){
+    clear(C.ink);
+    // the door slowly closing on Kay
+    const close=Math.min(1,this.t/180);
+    rect(40,80,W-80,320,'#1a1208'); // room beyond
+    // Michael receiving kiss of the ring
+    drawSprite(SPR.mike.rows,SPR.mike.map,W/2-20,180,5);
+    for(let i=0;i<3;i++){ const gx=W/2-60+i*60; drawSprite(SPR.guy.rows,SPR.guy.map,gx-8,260,2); }
+    ptextC('DON CORLEONE.', W/2, 150, 2, C.gold);
+    // closing door (left + right panels)
+    rect(40,80, (W-80)/2*close, 320, '#0a0805');
+    rect(W-40-(W-80)/2*close, 80, (W-80)/2*close, 320, '#0a0805');
+    if(close>=1){
+      ptextC('THE DOOR CLOSES.', W/2, 230, 2, C.blood);
+      ptextC('YOU HAVE EARNED '+save.respect+' RESPECT', W/2, 300, 1, C.gold);
+      ptextC('GRAZIE. THE FAMILY IS YOURS.', W/2, 320, 1, C.cream);
+      if(Math.floor(this.t/30)%2===0) ptextC('TAP TO RETURN', W/2, 380, 2, C.sepia);
+    }
+    vignette(); scanlines();
+  }
+};
+
+/* ====================================================================== */
+/* ORIENTATION + START                                                     */
+/* ====================================================================== */
+const rotateEl=document.getElementById('rotate');
+const tapStart=document.getElementById('tapstart');
+const hintEl=document.getElementById('hint');
+function checkOrient(){
+  // allow both; portrait fits best but landscape still scales. Only warn if extremely wide+short.
+  rotateEl.style.display='none';
+}
+window.addEventListener('resize', checkOrient); checkOrient();
+
+let started=false;
+function begin(){
+  if(started) return; started=true;
+  tapStart.style.display='none';
+  ensureAudio();
+  hintEl.style.opacity='1'; setTimeout(()=>hintEl.style.opacity='0', 4000);
+  setScene(introScene);
+  requestAnimationFrame(frame);
+}
+tapStart.addEventListener('pointerdown', begin);
+tapStart.addEventListener('click', begin);
+window.addEventListener('keydown', ()=>{ if(!started) begin(); });
+
+// expose for tests
+window.__CORLEONE__ = {
+  get scene(){ return scene; }, setScene, launchGame, GAMES, save,
+  forceStart:begin, getInput:()=>Input, simTap:(x,y)=>{ pDown(x,y); }, simRelease:()=>pUp(),
+};
+</script>
+</body>
+</html>
